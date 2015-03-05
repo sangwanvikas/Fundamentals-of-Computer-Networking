@@ -1,0 +1,277 @@
+__author__ = 'vikas'
+#!/usr/bin/env python
+import socket
+from HTMLParser import HTMLParser
+import sys
+import time
+
+class WebCrawler:
+
+    # Global variables used throughout the program
+    frontier = []
+    listOfVisitedLinks = []
+    key = []
+    keyCounter = 0
+    host = "cs5700sp15.ccs.neu.edu"
+    port = 80
+    httpStatusCode = 0
+    csrToken =''
+    sessionID = ''
+
+    class AllLanguages(HTMLParser):
+        def __init__(self):
+            HTMLParser.__init__(self)
+            self.inLink = False
+            self.isFlag = False
+
+        # This method is called when an HTML header is parsed.
+        def handle_starttag(self, tag, attrs):
+            self.inLink = False
+            self.isFlag = False
+
+            # Insert discovered links (anchor tag elements) in the frontier iff they are not already crawled
+            if tag == 'a':
+                for name, value in attrs:
+                    if value not in WebCrawler.listOfVisitedLinks and value != None and value not in WebCrawler.frontier:
+                        WebCrawler.frontier.append(value)
+
+            # Check if the current HTML page contains SECRET_FLAG
+            if tag == 'h2':
+                for name, value in attrs:
+                    if name == 'class' and value == 'secret_flag':
+                        self.isFlag = True
+                        break
+                    else:
+                        return
+
+            if tag == 'ul':
+                for name, value in attrs:
+                    if name == 'class' and value == 'errorlist':
+                        print "Please enter a correct username and password. Note that both fields are case-sensitive"
+                        break
+
+        # This method is called when a closing tag of an HTML element is parsed.
+        def handle_endtag(self, tag):
+            if tag == "a":
+                self.inlink = False
+            if tag == 'h2':
+                self.isFlag = False
+
+        # This method is used to get data for an HTML tag
+        def handle_data(self, data):
+            # If a SECRET_FLAG been discovered then Print it
+            if self.isFlag == True:
+                WebCrawler.keyCounter = WebCrawler.keyCounter + 1
+                print data.split(': ')[1]
+
+    # Constructor : assign username and password provided by user while running program
+    def __init__(self,unameFromUser,pwFromUser):
+        self.username = unameFromUser
+        self.password = pwFromUser
+        self.makeGETRequest("http://cs5700sp15.ccs.neu.edu/fakebook/")
+
+    # receive data in chunks (whether or not the data size is greater than a socket can receive)
+    def recv_timeout(self,the_socket,currentLink,timeout=1/100):
+        try:
+            #make socket non blocking
+            the_socket.setblocking(0)
+
+            #total data partwise in an array
+            total_data=[]
+            data=''
+            # print currentLink
+            #beginning time
+            begin=time.time()
+            while 1:
+                #if you got some data, then break after timeout
+                if total_data and time.time()-begin > timeout:
+                    break
+
+                try:
+                    data = the_socket.recv(8192)
+                    if data:
+                        total_data.append(data)
+                        #change the beginning time for measurement
+                        begin = time.time()
+                    else:
+                        #sleep for sometime to indicate a gap
+                        time.sleep(0.1)
+                except:
+                    pass
+
+            #join all parts to make final string
+            return ''.join(total_data)
+        except:
+            print "Error occured, please try to run again!"
+
+    # handle HTTP status codes (200, 301, 302, 403, 500)
+    def checkStatus(self,data,currentLink):
+        try:
+            # get httpStatus code from response
+            httpStatus = data.split(' ')[1]
+            self.httpStatusCode = httpStatus
+
+            # for 301 : Crawler tries the request again using the new URL given by the server.
+            if httpStatus == "301" or httpStatus == "302":
+                self.httpStatusCode = httpStatus
+                newLinkFromServer = str(data.split('Location: ')[1].split('\n')[0])
+                # check whether or not user is logged in
+                if self.sessionID == '':
+                    self.makeGETRequest(newLinkFromServer)
+                else:
+                    self.makeGetRequestWithCookie(newLinkFromServer)
+
+            # for 500 : Crawler re-tries the request for the URL until the request is successful.
+            elif httpStatus == "500":
+                    self.httpStatusCode = httpStatus
+                    # check whether or not user is logged in
+                    if self.sessionID == '':
+                        self.makeGETRequest(currentLink)
+                    else:
+                        self.makeGetRequestWithCookie(currentLink)
+        except:
+            print"Error occured, please try to run again!"
+
+    # first HTTP GET request
+    def makeGETRequest(self,link):
+        try:
+            # prepare header for HTTP GET request
+            httpHeader = "GET " + str(link) + " HTTP/1.0\n\n"
+
+            # initialize socket
+            sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+            sock.connect((self.host,self.port))
+
+            # send data to the server
+            sock.sendall(httpHeader)
+
+            # receive data from the server using this method
+            r1 = self.recv_timeout(sock,link)
+
+            # check HTTP status codes
+            self.checkStatus(r1,link)
+
+            # This method is used to insert recently discovered links when the current page is downloaded
+            al = WebCrawler.AllLanguages()
+            al.feed(r1)
+            # When 200 ok response is received along with CSRF token and SESSIONID, make an HTTP POST request
+            if self.httpStatusCode == "200" and r1.__contains__('csrftoken'):
+                # fileter out CSRF token and SessionID
+                self.csrToken = r1.split('csrftoken=')[1].split(';')[0]
+                self.sessionID = r1.split('sessionid=')[1].split(';')[0]
+                self.makePOSTRequest(link)
+
+            # Close the socket
+            sock.close()
+        except:
+            print "Error occured, please try to run again!"
+            sock.close()
+
+    # first HTTP POST request to login to the FAKEBOOK
+    def makePOSTRequest(self,currentLink):
+        try:
+            # prepare header for HTTP POST request
+            httpClient1 = "POST "+currentLink +" HTTP/1.0\n"
+            httpClient1 += "Host: cs5700sp15.ccs.neu.edu\n"
+            httpClient1 += "Accept-Language: en-US,en;q=0.5\n"
+            httpClient1 += "Encoding: gzip, deflate\n"
+            httpClient1 += "Cookie: csrftoken="+self.csrToken+"; sessionid="+self.sessionID+"\n"
+            httpClient1 += "Connection: keep-alive\n"
+            httpClient1 += "Content-Type: application/x-www-form-urlencoded\n"
+            httpClient1 += "Content-Length: 105\n\n"
+
+            # message body for HTTP POST request
+            httpClient1 += "username="+self.username+"&password="+self.password+"&csrfmiddlewaretoken="+self.csrToken+"&next=/fakebook/"
+
+            # Initialize socket
+            sock1 = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+            sock1.connect((self.host,self.port))
+
+            # send data to the server
+            sock1.sendall(httpClient1)
+
+            # receive data from the server using this method
+            r2 = self.recv_timeout(sock1,currentLink)
+
+            # get new SessionID and assign to the sessionID global variable
+            self.sessionID = r2.split('sessionid=')[1].split(';')[0]
+
+            # This method is used to insert recently discovered links when the current page is downloaded
+            al = WebCrawler.AllLanguages()
+            al.feed(r2)
+
+            # Close the socket
+            sock1.close()
+
+            # This method is called to make an HTTP GET calls on all links available in the FRONTIER.
+            self.newMethod()
+        except:
+            print "Error occured, please try to run again!"
+            sock1.close()
+
+    # HTTP GET request to download a given page (link as an argument) when a user is logged in to the website
+    def makeGetRequestWithCookie(self,linkItem):
+        try:
+            #  Creates header for the HTTP GET request
+            httpClient2 = "GET "+ linkItem +" HTTP/1.0\n"
+            httpClient2 += "Host: cs5700sp15.ccs.neu.edu\n"
+            httpClient2 += "Cookie: csrftoken="+self.csrToken+"; sessionid="+self.sessionID+"\n\n"
+
+            # Initialize the socket
+            sock2 = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+            sock2.connect((self.host,self.port))
+
+            # send data to the server
+            sock2.sendall(httpClient2)
+
+            # receive data from the server
+            r2 = self.recv_timeout(sock2,linkItem)
+
+            # Handle HTTP Status code
+            self.checkStatus(r2,linkItem)
+
+            # This method is used to insert recently discovered links when the current page is downloaded
+            al = WebCrawler.AllLanguages()
+            al.feed(r2)
+
+            #  Close the socket
+            sock2.close()
+        except:
+	    print r2
+            print "Error occured, please try to run again!"
+            sock2.close()
+
+    # Crawl every element from until Frontier is empty or it prints all 5 keys
+    def newMethod(self):
+        try:
+            while len(self.frontier) > 0 and self.keyCounter  < 5:
+
+                # FRONTIER is used as a STACK (removing last element from the Frontier - LIFO) :
+                # Crawling elements applying DEPTH FIRST SEARCH
+                linkItem = self.frontier[len(self.frontier) - 1]
+
+                # If a Link has not already been crawled then add it to the frontier, and crawl it.
+                if linkItem not in self.listOfVisitedLinks:
+                    # Download this page applying HTTP GET request
+                    self.makeGetRequestWithCookie(linkItem)
+
+                    # insert current link the list of visited links.
+                    self.listOfVisitedLinks.append(linkItem)
+
+                    # remove current link from frontier after being crawled successfully
+                    self.frontier.remove(linkItem)
+                else:
+                    self.frontier.remove(linkItem)
+        except:
+            print "Error occured, please try to run again!"
+
+
+try:
+    if len(sys.argv) == 3:
+	    uname = sys.argv[1]
+	    pwd = sys.argv[2]
+	    WebCrawler(uname,pwd)
+    else:
+	    print "Illegal number of arguments passed, please try again !!"
+except:
+    print "Error occured, please try to run again!"
