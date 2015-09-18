@@ -1,6 +1,6 @@
-************************************************************************************************************************************
+************************************************************************************************
 High-level approach
-************************************************************************************************************************************
+************************************************************************************************
 
 The goal of this project is to implement a web crawler that gathers data from a fake social networking website. We have created sockets for establishing client-server communication. We followed object oriented approach to integrate required functionalities. All properties of WebCrawler have been declared as variables (e.g. Frontier = [], listOfVisitedLinks = [], host = "cs5700sp15.ccs.neu.edu", port = 80, httpStatusCode = 0, csrToken ='', sessionID = ''), and behavior of WebCrawler (make GET/POST requests, send/receive messages, handle HTTP STATUS and perform calculations) have been defined as methods.
 
@@ -18,9 +18,9 @@ Core logic of this project implements "DEPTH-FIRST SEARCH"; all links, which are
 6. After successfully discovering all five keys, this program gets termminated.
 
 
-************************************************************************************************************************************
+************************************************************************************************
 Challenges faced
-************************************************************************************************************************************
+************************************************************************************************
 
 1. While creating headers for HTTP GET and POST request we used developer tools to include mandatory headers. 
 2. the most of the efforts were consumed while making HTTP POST header along with the message body. We not unable to log in to the website programmatically. The problem we were facing was related to the "CSRF Verification". We resolved this error checking the correctness of our HTTP header going through following steps:
@@ -31,9 +31,9 @@ Once we could send the response using telnet, we included that header in our pro
 4. Filtering out secret flags, we accomplished it using htmlparser library.
 
 
-************************************************************************************************************************************
+************************************************************************************************
 Overview of how we tested your code
-************************************************************************************************************************************
+************************************************************************************************
 
 1. We performed unit testing without running project from the terminal, we hard coded credentials and tested the functionality.
 
@@ -60,6 +60,6 @@ Expected Behavior: terminate the program after printing the five secret flags su
 Output            : terminates the program after printing the five secret flags successfully
 
 
-************************************************************************************************************************************
+************************************************************************************************
 END
-************************************************************************************************************************************
+************************************************************************************************
