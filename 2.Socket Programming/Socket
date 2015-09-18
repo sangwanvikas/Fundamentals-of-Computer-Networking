@@ -1,4 +1,3 @@
-__author__ = 'vikas'
 #!/usr/bin/env python
 
 import socket

@@ -1,4 +1,4 @@
-************************************************************************************************************************************
+﻿************************************************************************************************************************************
 High Level Approach
 ************************************************************************************************************************************
 
@@ -123,11 +123,24 @@ How to implement handlers, and override their methods was clear to us, so we fou
 
 Although we did not face any difficulty while preparing deployCDN script but for runCDN we had to start a process on DNS sever and another on HTTP, so the syntax for running a process in background of a server was new for us, we fixed this issue using 'nohup' and could successfully run processes on background of respective servers. 
 
+
 ************************************************************************************************************************************
 Each team member contribution
 ************************************************************************************************************************************
 
 *****Contribution by team-members****
+Vikas was primarily responsible for the following tasks:
+* unpacking request received by the DNS and packing domain name and ip address to construct DNS answer.
+* Designing the layout/flow/architecture for the DNS server.
+* Parsing command lne arguments of the DNS script.
+* Designed architecture/flow of the HTTP program
+* Implementing BaseHTTPRequestHandler for processing the requests received.
+* Implemented the cache functionality.
+* Responsible for performing UNIT testing.
+* Tested functionality for caching.
+* Prepared runCDN scripts
+* Prepared README file
+
 Shaalini was primarily responsible for the follwing tasks:
 * Gathering complete information about DNS packes- like how to pack/unpack requests.
 * Implemented the functionality for abstracting question name while unpacking the request.
@@ -140,16 +153,7 @@ Shaalini was primarily responsible for the follwing tasks:
 * Prepared deployCDN, and stopCDN scripts and Makefile
 
 
-Vikas was primarily responsible for the following tasks:
-* unpacking request received by the DNS and packing domain name and ip address to construct DNS answer.
-* Designing the layout/flow/architecture for the DNS server.
-* Parsing command lne arguments of the DNS script.
-* Designed architecture/flow of the HTTP program
-* Implementing BaseHTTPRequestHandler for processing the requests received.
-* Implemented the cache functionality.
-* Responsible for performing UNIT testing.
-* Tested functionality for caching.
-* Prepared runCDN scripts
-* Prepared README file
-----------------------------------------------------------------------------------------------------------------------------------------------------------------
-If we had time we would have implemented multithreaded HTTP server to serve multiple clients at once thus improving the performance. When content is available in the CDN, it is meant to be available for the clients so we would have implemented functionality to made it available over IPV4 and IPV6 as well.
+************************************************************************************************************************************
+Scope of Improvement
+************************************************************************************************************************************
+If we had more time we would have implemented multithreaded HTTP server to serve multiple clients at once thus improving the performance. When content is available in the CDN, it is meant to be available for the clients so we would have implemented functionality to made it available over IPV4 and IPV6 as well.

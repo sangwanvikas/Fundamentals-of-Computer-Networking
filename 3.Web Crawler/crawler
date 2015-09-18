@@ -1,9 +1,13 @@
-__author__ = 'vikas'
 #!/usr/bin/env python
 import socket
 from HTMLParser import HTMLParser
 import sys
 import time
+from urlparse import urlparse
+import urlparse
+from htmlentitydefs import name2codepoint
+
+
 
 class WebCrawler:
 
@@ -70,7 +74,7 @@ class WebCrawler:
         self.password = pwFromUser
         self.makeGETRequest("http://cs5700sp15.ccs.neu.edu/fakebook/")
 
-    # receive data in chunks (whether or not the data size is greater than a socket can receive)
+    # receive data in chunks if size in > 8016
     def recv_timeout(self,the_socket,currentLink,timeout=1/100):
         try:
             #make socket non blocking
@@ -79,7 +83,7 @@ class WebCrawler:
             #total data partwise in an array
             total_data=[]
             data=''
-            # print currentLink
+
             #beginning time
             begin=time.time()
             while 1:
@@ -237,7 +241,6 @@ class WebCrawler:
             #  Close the socket
             sock2.close()
         except:
-	    print r2
             print "Error occured, please try to run again!"
             sock2.close()
 

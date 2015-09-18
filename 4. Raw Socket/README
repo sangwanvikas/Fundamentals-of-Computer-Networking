@@ -1,8 +1,13 @@
-*****High-level approach******
+************************************************************************************************************************************
+High-level approach:
+************************************************************************************************************************************
 
 Implementing low-level operations of the Internet protocol stack, without hiding the underlying complexity of creating and managing IP and TCP headers we have developed a program called rawhttpget, which accepts URL as a command line arguments. It executes until all associated files are downloaded successfully. We have achieved this functionality rebuilding the operating system's TCP/IP stack.
 
-**Instructions for running program:**
+************************************************************************************************************************************
+Instructions for running program:
+************************************************************************************************************************************
+
 1.)To run this program one must have root privileges (i.e. run using sudo). To download a file successfully enter a valid URL after typing program name in the command line, syntax shown as below:
 sudo ./rawhttpget [URL]
 
@@ -42,16 +47,20 @@ When a user executes this program, we determine source MAC address, source IP ad
 
 After implementing AF_PACKET raw socket in our program, it is taking little more time to download the file for provided URL than AF_INET. But it never goes to infinitely while running over and over again.
 
+************************************************************************************************************************************
+Challenges Faced:
+************************************************************************************************************************************
 
-*****Challenges Faced*****
 We started developing this project with AF_INET socket, bypassing Layer 3 and Layer 4 of OSI stack. We had to understand the format of TCP/IP headers for building the packets in-depth and got stuck while providing checksum value for TCP header (IP header checksum will be set by the OS). We learned about PseudoHeader concepts and successfully assigned correct checksums for each outgoign packet. It took time to unpack the TCP flags' values. The major challenge we faced was how to parse the header fields so that our program will collect only those packets which was sent by server for us. Sending correct sequence and acknowledgement number to the server was also challenging since we were supposed to maintian sequence number and data size of previously recived packet to avoid out-of-order delivery. Once we had successfully downloaded the 2MB file we pasted to windows machine, to match the md5sum we removed its header and then pasted back to Linux machine to check its md5sum with same file downloaded by wget command. We were getting different md5sum values, and later realized that it's happeing due to difference in Unicode Encoding of linux and windows i.e. "Unicode" on Windows is UTF-16LE, and each character is 2 or 4 bytes. Linux uses UTF-8, and each character is between 1 and 4 bytes. So while removing header on the fly we could resolve this issue. Once we could download all files following all checks/validations we started tranforming this project to AF_PACKET raw socket.
 
 We learned about ARP packet, its significance and behavior. We figured out what should be the values of parameters, required to create ARPheader. We were not able to broadcast the ARP packet successfully attaching with Ethernet packet, while searching more about it, we realized that the "eth0" type values should be int(hex(2054),16) while sending ARP packet and should be int(hex(2048),16) while sending Ehternet packet to the data. Determining MAC address of the gateway was more challenging than expected. And there were many ways to get destination IP address, and we chose to get it using subprocess libraries. After that we builded the ethernets pakcet successfully to be sent to the server, but while monitoring traffic through wireshark we discovered we are getting bad value of checksum for IP packet. We realized that now Operating System will not assign value to the IP since using AF_PACKET  we are bypassing this. So we calculated dummy header initially for ip with zero checksum packing it with correct format, then we send it to our checksum method. And value received was assigend to the checksum variable for IP and re-packed it , sending forward for building ethernet packet. 
 
 After implementing AF_PACKET raw socket we not getting data properly and while debugging it we realized that in layer 2, the raw socket adds padding (as bytes) at the end of an Ethernet frame. The minimum length of user data is 46 bytes (in an Ethernet Frame) so AF_PACKET socket adds few bits to the shorter Ethernetframes. So it was causing wrong extraction of data from the packet. So for the data with extra 6 bytes (46 - 20(IPheader length) - 20 (TCPheader length)) we are checking if data size is greater than 6 bytes, balancing the value in the tcp header.
 
+************************************************************************************************************************************
+Contribution by team-members:
+************************************************************************************************************************************
 
-*****Contribution by team-members****
 Shaalini was primarily responsible for the follwing tasks:
 * Setting values for the TCP header fileds, and values for the Pseudo header fields for implementing 3-WAY Handshake 
 * Providing correct sequence number and acknowledgement number for each outgoing packet. This part is a legacy code irrespective of we are using AF_PACKET or AF_INET raw socket.
@@ -68,7 +77,9 @@ Vikas was primarily responsible for the following tasks:
 * Maintianed congestion window, and configuring local port number to a random variable everytime a user executes the program, parsed URL with http://. Did not handle validation of URLs.
 * Responsible for performing UNIT testing.
 
-*****Testing******
+************************************************************************************************************************************
+Testing
+************************************************************************************************************************************
 
 * sudo ./rawhttpget http://david.choffnes.com/
 RESULT : downloaded the file with name index.html and checked if the file is similar to the one downloaded using wget
