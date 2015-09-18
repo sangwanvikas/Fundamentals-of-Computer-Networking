@@ -1,0 +1,80 @@
+#!/usr/bin/env python
+import getopt
+import sys
+import subprocess
+
+
+#############################################################################################
+''' Variable section'''
+##############################################################################################	
+
+# list of all replicas
+list_ec2_replicas = ["ec2-52-0-73-113.compute-1.amazonaws.com",
+"ec2-52-16-219-28.eu-west-1.compute.amazonaws.com",
+"ec2-52-11-8-29.us-west-2.compute.amazonaws.com",      
+"ec2-52-8-12-101.us-west-1.compute.amazonaws.com",        
+"ec2-52-28-48-84.eu-central-1.compute.amazonaws.com",
+"ec2-52-68-12-77.ap-northeast-1.compute.amazonaws.com",    
+"ec2-52-74-143-5.ap-southeast-1.compute.amazonaws.com",  
+"ec2-52-64-63-125.ap-southeast-2.compute.amazonaws.com",  
+"ec2-54-94-214-108.sa-east-1.compute.amazonaws.com"]
+
+#############################################################################################
+''' Execution of runCDN script begins from here'''
+##############################################################################################	
+''' parsing command line arguments '''
+command_line_text = getopt.getopt(sys.argv[1:], 'p:o:n:u:i:')
+operators_in_command_line = command_line_text[0]
+command_line_args = command_line_text[1]
+
+for an_operator, an_arg in operators_in_command_line:
+	if an_operator == "-p":
+		udp_port_number = int(an_arg)
+
+	elif an_operator == "-o":
+		origin_name = an_arg
+
+	elif an_operator == "-n":
+		dns_cs5700cdn_example = an_arg
+
+	elif an_operator == "-u":
+		user_name = an_arg
+
+	elif an_operator == "-i":
+		key_file =  an_arg
+
+
+''' RUN dns servers '''
+''' set username@hostname '''
+dns_hosted_on = "cs5700cdnproject.ccs.neu.edu"
+user_name_at_host_name = user_name + "@" + dns_hosted_on
+
+''' Before running "dnsserver" file - change permissions to +x '''
+sys_call_to_set_permission_for_dns = subprocess.Popen(["ssh","-i",key_file,"-n","-f", user_name_at_host_name, "chmod +x dnsserver"],stdout=subprocess.PIPE)
+sys_call_to_set_permission_for_dns.communicate()[1]
+
+''' Before running "mappingscript.py" file - change permissions to +x '''
+sys_call_to_set_permission_for_mappscript = subprocess.Popen(["ssh","-i",key_file,"-n","-f", user_name_at_host_name, "chmod +x mappingscript.py"],stdout=subprocess.PIPE)
+sys_call_to_set_permission_for_mappscript.communicate()[1]
+
+''' run as a background process on -  "cs5700cdnproject.ccs.neu.edu" server '''
+last_arg_for_dns_server = "sh -c 'nohup ./dnsserver -p " + str(udp_port_number) +" -n "+dns_cs5700cdn_example+ " > /dev/null 2>&1 &'"
+sys_call_to_exec_dnsserver = subprocess.Popen(["ssh","-i",key_file,"-n","-f", user_name_at_host_name, last_arg_for_dns_server],stdout=subprocess.PIPE)
+sys_call_to_exec_dnsserver.communicate()[1]
+
+
+
+''' RUN http servers '''
+for ec2_server_name in list_ec2_replicas:
+	user_name_at_host_name = user_name+"@"+ec2_server_name
+	sys_call_to_set_perm_for_http_Serv = subprocess.Popen(["ssh","-i",key_file,"-n","-f", user_name_at_host_name, "chmod +X httpserver"],stdout=subprocess.PIPE)
+	sys_call_to_set_perm_for_http_Serv.communicate()[1]
+
+	''' run as a background process on -  all replica servers '''
+	last_arg_for_http_server = "sh -c 'nohup ./httpserver -p " + str(udp_port_number) +" -o "+origin_name+ " > /dev/null 2>&1 &'"
+	sys_call_to_exec_httpserver = subprocess.Popen(["ssh","-i",key_file,"-n","-f", user_name_at_host_name, last_arg_for_http_server],stdout=subprocess.PIPE)
+	sys_call_to_exec_httpserver.communicate()[1]
+
+#############################################################################################
+''' Script ends'''
+##############################################################################################	

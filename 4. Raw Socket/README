@@ -1,0 +1,101 @@
+*****High-level approach******
+
+Implementing low-level operations of the Internet protocol stack, without hiding the underlying complexity of creating and managing IP and TCP headers we have developed a program called rawhttpget, which accepts URL as a command line arguments. It executes until all associated files are downloaded successfully. We have achieved this functionality rebuilding the operating system's TCP/IP stack.
+
+**Instructions for running program:**
+1.)To run this program one must have root privileges (i.e. run using sudo). To download a file successfully enter a valid URL after typing program name in the command line, syntax shown as below:
+sudo ./rawhttpget [URL]
+
+An example invocation of the program might look like this:
+./rawhttpget http://david.choffnes.com/classes/cs4700sp15/project4.php
+This would create a file named project4.php in the current directory containing the downloaded HTML content. 
+
+If the URL ends in a slash ('/') or does not include any path, downloaded file takes the default filename index.html. For example, the program would generate a file called index.html if you
+ran the following command:
+./rawhttpget http://www.ccs.neu.edu
+Note - While running the above command using wget we are getting 403 forbidden error, hence our program is also showing an error message and gets truncated since it does not have 200 OK in the header. It does not get downloaded for me even using wget command.
+
+2.) One who executes this program needs to make one change to iptables in order to set a rule in iptables that drops outgoing TCP RST packets, using the following command:
+% iptables -A OUTPUT -p tcp --tcp-flags RST RST -j DROP
+
+3. This program does not support HTTPS.
+4. This program does not follow redirects, or handle HTTP status codes other than 200. 
+5. This program does not handle HTTP status codes other than 200.In the case of a non-200 status code, print an error to the console and close the program. 
+6. This program does not follow links or otherwise parse downloaded HTML. 
+7. If the program terminates with an error, then before rerunning the program for the same link user must have to delete the downloaded file before he starts the program to avoid unexpected behaviour of the file.
+8. All downloaded files are created with append mode for writing data into it, and are closed properly after sending FIN ACK while teardown.
+
+We have used AF_PACKET, raw socket, in our program to receive or send raw packets at the device driver (OSI Layer 2) level. They allow the user to implement  protocol modules in user space on top of the physical layer. This program builds Ethernet frames for each packet, as well as IP and TCP frames. We have not handled anything related to alternative layer-2 protocols like Wifi or 3G. We obtained MAC address of gateway with the help of ARP requests. We build an ARP packet with the help of gateway MAC IP, source MAC address and source IP. Then we broadcast it with the Ethernet frame. We parse the information received back, to get a MAC address for "eth0" interface. Challenegs faced while performing these steps are discussed in the very next section of this README file.
+
+We have filtered incoming packets to isolate the ones that belong to our program. All other packets are ignored. We have implemented all features of IP packets including validating the checksums of incoming packets, and setting the correct version, header length and total length, protocol identifier, and checksum in each outgoing packet. We have also set the source and destination IP in each outgoing packet. We are also checking following things while receiving data, as a part of defensive coding :
+* validity of the IP header.
+* correctness of the remote IP
+* valid checksum received
+* protocol match with the header.
+
+We have also implemented a subset of TCP's functionality. We verify the checksums of incoming TCP packets, and generate correct checksums for outgoing packets. We select a valid local port randomly to send traffic on, perform the three-way handshake, and correctly handle connection teardown. We correctly handle sequence and acknowledgement numbers. We have also managed the advertised window, and included basic timeout functionality i.e. if a packet is not ACKed within 1 minute, it is assumed the packet is lost and program retransmits it. We are also maintaing the order of the received packet in line with received previously before delivering them to the higher-level, HTTP handling code. We discard duplicate packets. We are maintaining congestion such that it startws with cwnd=1, and increment the cwnd after each succesful ACK by 1, up to a fixed maximum of 1000 (e.g. cwnd must be <=1000 at all times). We reequest server to retransmit the packet when packet drop is seen, and reset the cwnd to 1. Similar to IP, we have followed defensive way while receiving the data with the help of following features:
+* We ensure that all incoming packets have valid checksums 
+* We ensure that all incoming packets have in-order sequence numbers. 
+* If our program does not receive any data from the remote server for three minutes, it assumes that the connection has failed. And program can simply print an error message and close.
+
+When a user executes this program, we determine source MAC address, source IP address, gateway IP address. Then we build an ARP packet and broadcast it so that we can obtain gateway MAC address. First of all we send an SYN to the server building TCP frame, IP frame and then Ethernet frame. As soon as our program receives filtered and valid SYN ACK from the server, which was supposed to be sent to the port number which our program is usign to run on we, program acknowledges this response from the server and send another ACK, thus completing the 3 Way Handshake. Now we send an HTTP GET request to the server creating httpheader, then tcpheader, then IP header followed by ethernetheader. Until server sends the whole data we keep receiving it and writing in the file successfully. If the the response of the link, provided by the user, from server does not contain 200 OK, our program prints an error message and gets terminated. While recieving data all the functionlaities/checks/filters/validations discussed until this paragrah have been implemented. As soon our program receives a FIN flag from the server, we ACK it to terminate the connection, and send an FIN ACK to tear down the connection.
+
+After implementing AF_PACKET raw socket in our program, it is taking little more time to download the file for provided URL than AF_INET. But it never goes to infinitely while running over and over again.
+
+
+*****Challenges Faced*****
+We started developing this project with AF_INET socket, bypassing Layer 3 and Layer 4 of OSI stack. We had to understand the format of TCP/IP headers for building the packets in-depth and got stuck while providing checksum value for TCP header (IP header checksum will be set by the OS). We learned about PseudoHeader concepts and successfully assigned correct checksums for each outgoign packet. It took time to unpack the TCP flags' values. The major challenge we faced was how to parse the header fields so that our program will collect only those packets which was sent by server for us. Sending correct sequence and acknowledgement number to the server was also challenging since we were supposed to maintian sequence number and data size of previously recived packet to avoid out-of-order delivery. Once we had successfully downloaded the 2MB file we pasted to windows machine, to match the md5sum we removed its header and then pasted back to Linux machine to check its md5sum with same file downloaded by wget command. We were getting different md5sum values, and later realized that it's happeing due to difference in Unicode Encoding of linux and windows i.e. "Unicode" on Windows is UTF-16LE, and each character is 2 or 4 bytes. Linux uses UTF-8, and each character is between 1 and 4 bytes. So while removing header on the fly we could resolve this issue. Once we could download all files following all checks/validations we started tranforming this project to AF_PACKET raw socket.
+
+We learned about ARP packet, its significance and behavior. We figured out what should be the values of parameters, required to create ARPheader. We were not able to broadcast the ARP packet successfully attaching with Ethernet packet, while searching more about it, we realized that the "eth0" type values should be int(hex(2054),16) while sending ARP packet and should be int(hex(2048),16) while sending Ehternet packet to the data. Determining MAC address of the gateway was more challenging than expected. And there were many ways to get destination IP address, and we chose to get it using subprocess libraries. After that we builded the ethernets pakcet successfully to be sent to the server, but while monitoring traffic through wireshark we discovered we are getting bad value of checksum for IP packet. We realized that now Operating System will not assign value to the IP since using AF_PACKET  we are bypassing this. So we calculated dummy header initially for ip with zero checksum packing it with correct format, then we send it to our checksum method. And value received was assigend to the checksum variable for IP and re-packed it , sending forward for building ethernet packet. 
+
+After implementing AF_PACKET raw socket we not getting data properly and while debugging it we realized that in layer 2, the raw socket adds padding (as bytes) at the end of an Ethernet frame. The minimum length of user data is 46 bytes (in an Ethernet Frame) so AF_PACKET socket adds few bits to the shorter Ethernetframes. So it was causing wrong extraction of data from the packet. So for the data with extra 6 bytes (46 - 20(IPheader length) - 20 (TCPheader length)) we are checking if data size is greater than 6 bytes, balancing the value in the tcp header.
+
+
+*****Contribution by team-members****
+Shaalini was primarily responsible for the follwing tasks:
+* Setting values for the TCP header fileds, and values for the Pseudo header fields for implementing 3-WAY Handshake 
+* Providing correct sequence number and acknowledgement number for each outgoing packet. This part is a legacy code irrespective of we are using AF_PACKET or AF_INET raw socket.
+* Setting values for the fileds of ethernet frames, like type value for eth should be different while broadcasting an ARP packet from eth value type while sending data enclosed in the Ethernet frame
+* Analyzed traffic through wireshark, and helped vikas understanding more about it.
+* Also figured out how ARP frame is broadcasted with Ethernet packet.
+
+Vikas was primarily responsible for the following tasks:
+* Setting values for the IP header field's and joining it with TCP header contianing user data.
+* calculating checksum, assigning it to every outgoing packet and checking validity of checksum values for incoming packets.
+* Logic for receiving fileterd data, unpacking each header and writing into the file.
+* Retrasmitting requests by the clients for out-of-order and lost packets.
+* Terminated connection after 3 minutes if no data recieved from the server for three minutes, and also implemented timeout logic.
+* Maintianed congestion window, and configuring local port number to a random variable everytime a user executes the program, parsed URL with http://. Did not handle validation of URLs.
+* Responsible for performing UNIT testing.
+
+*****Testing******
+
+* sudo ./rawhttpget http://david.choffnes.com/
+RESULT : downloaded the file with name index.html and checked if the file is similar to the one downloaded using wget
+
+* sudo ./rawhttpget http://david.choffnes.com/classes/cs4700sp15/2MB.log
+RESULT : file is downloaded with the name 2MB.log 
+
+* sudo ./rawhttpget http://david.choffnes.com/classes/cs4700sp15/10MB.log
+RESULT :  file is downloaded with the name 10MB.log
+
+* sudo ./rawhttpget http://david.choffnes.com/classes/cs4700sp15/50MB.log 
+RESULT : file is downloaded with the name 50MB.log 
+
+* sudo ./rawhttpget http://cs5700sp15.ccs.neu.edu/accounts/login/?next=/fakebook/
+RESULT : file is downloaded with the name index.html and the similarity is checked using diff command as the csrf token is varying everytime, although the size of the file remains the same 
+
+* sudo ./rawhttpget http://david.choffness.com 
+RESULT :   The program terminates with the error message "Error occured, please try to run again!"
+
+* sudo ./rawhttpget 1 http://david.choffnes.com 
+RESULT :   The program is terminates with the message "Illegal number of arguments passed, please try again !!"
+
+* sudo ./rawhttpget 1 http:/david.choffnes.com 
+RESULT :   The program terminates with the message "Error occured, pleae try again !!"
+
+* sudo ./rawhttpget http://david.choffnes.com/classes/cs4700sp15/501MB.log  
+RESULT :   The program terminates by printing "Does not contain 200 ok !! Please try again."
+
+* sudo ./rawhttpget http://www.ccs.neu.edu ---> 
+RESULT :   The program terminates with the error message "Does not contain 200 ok !! Please try again."

@@ -1,0 +1,194 @@
+#!/usr/bin/env python
+''' to open URL '''
+import urllib2
+import sys
+import urlparse
+''' for cache management '''
+import os
+''' import httpserver and BaseHTTPRequestHandler from BaseHTTPServer module '''
+from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
+''' to delete a directly and content inside it '''
+import shutil
+
+##############################################################################################
+''' Variables section'''
+##############################################################################################
+
+''' a directory used to implement Least Frequently Used cache management technique '''
+frequency_dictionary ={}
+
+''' unit divided by this constant to convert bits into MB '''
+kb_to_mb_conversion_value = 1024 * 1024
+
+##############################################################################################
+''' HTTP Server handler class '''
+##############################################################################################
+class Handler_for_HTTP_Server(BaseHTTPRequestHandler):
+	''' overriding do_GET() action method '''
+	def do_GET(self):
+
+		''' private Variables '''
+		
+		file_path_given = self.path
+		
+		
+		http_status_code = 200
+		content_type = 'Content-type'
+		content_text_plain = 'text/plain'
+		
+		''' stores current directory '''
+		current_directory = os.path.dirname(os.path.realpath(__file__))
+		
+		
+		''' path where file is going to cached '''
+		path_for_chache_file = current_directory + file_path_given
+		
+
+		''' boolean value to determine - does the requested-file already exist in cache '''
+		if file_path_given == '/':
+			does_this_file_exist_in_chache = os.path.exists(path_for_chache_file+"filename3")
+		else:
+			does_this_file_exist_in_chache = os.path.exists(path_for_chache_file)
+
+		
+
+		''' if file does not exists in cache, then write into cache '''
+		if not does_this_file_exist_in_chache:
+			
+			''' create a directory where file is going to be saved '''
+			if not file_path_given == '/':
+				os.makedirs(path_for_chache_file)
+
+			link_requested = 'http://' + http_origin_server_name + ':8080' + file_path_given
+			reply_from_server = urllib2.urlopen(link_requested)
+			
+			''' save downloaded content in a variable '''
+			data_received =  reply_from_server.read()
+
+			''' size of the data received in MB'''
+			size_of_data_received = (data_received.__sizeof__())/kb_to_mb_conversion_value
+			
+			''' current cache size - withou writing newly requested file into it '''
+			cache_size = float(self.get_cache_size_in_mb(current_directory))
+			
+			max_permissible_size_of_cache = 10.0
+
+			'''if the current cache size is < 10 MB then directly write into cache. If current cache size exceeds 10MB of memory then
+			remove least frequently used files (Keep deleting file iteratively until cache_size + requested_file_size < 10 MB) from 
+			cache to make space for requested-file file. When there is enough space to accommodate requested-file file, it writes
+			into cache directory.'''
+			if cache_size < max_permissible_size_of_cache and cache_size + size_of_data_received < max_permissible_size_of_cache:
+			
+				self.write_into_file(path_for_chache_file, data_received)
+				frequency_dictionary.update({path_for_chache_file+"/filename3" : 1})
+			else:
+				''' Else part gets executed when when requested content does not exist in cache and this program tries to write into 
+				cache leading to cache memory cross over 10 MB  '''				
+
+				temp_cache_current_size = cache_size + size_of_data_received
+				
+				''' Keep deleting files one by one until cache_size + requested_file_size < 10 MB (based on LFU) '''
+				while temp_cache_current_size > max_permissible_size_of_cache:
+
+					''' sort dictionary by least frequently used files such that least frequently file is present
+					at the top '''
+					sorted_dict = sorted(frequency_dictionary.items(), key=lambda e: e[1])	
+					least_freq_used_file_key = sorted_dict[0][0]
+					
+
+					folder_path_without_filename = least_freq_used_file_key.split('filename3')[0]
+					
+
+					''' remove a directory containing least frequently file '''
+					shutil.rmtree(folder_path_without_filename)
+					''' after removing file from the cache, now it's time to remove from the dictionary '''
+					frequency_dictionary.pop(least_freq_used_file_key,None)
+
+					''' cache size after deleting least frequently used file''' 
+					temp_cache_current_size = float(self.get_cache_size_in_mb(current_directory))
+					
+				
+				''' Write a requested file into cache '''
+				self.write_into_file(path_for_chache_file, data_received)
+				''' it's time to update dictionary after writing file into a cache '''
+				frequency_dictionary.update({path_for_chache_file+"/filename3" : 1})
+		else:
+			''' This part will execute when requested file is already present in the cache '''
+						
+			''' open a file from cache to read content from it and writ into a file at the client's location '''
+			f = open(path_for_chache_file + "/filename3").read()				
+
+			self.send_response(http_status_code)
+			self.send_header(content_type, content_text_plain)
+			self.end_headers()
+			self.wfile.write(f)
+
+			total = frequency_dictionary.get(path_for_chache_file+"/filename3")
+			
+			frequency_dictionary.update({path_for_chache_file+"/filename3" : total+1})
+		with open(path_for_chache_file + "/filename3") as page:			
+			self.send_response(http_status_code)
+			self.send_header(content_type, content_text_plain)
+			self.end_headers()
+			self.wfile.write(page.read())
+
+
+
+##############################################################################################
+# Helper method to return total size of the cache directory (in MB)
+##############################################################################################	
+	def get_cache_size_in_mb(self, path_of_dir='.'):
+		total_size = 0
+		current_directory = os.path.dirname(os.path.realpath(__file__))
+		for dirpath, dirnames, filenames in os.walk(current_directory):
+		    for f in filenames:
+		        fp = os.path.join(dirpath, f)
+		        total_size += os.path.getsize(fp)
+		return float((total_size))/kb_to_mb_conversion_value
+
+
+##############################################################################################
+#Helper method for writing conent into cahce
+##############################################################################################
+    # logic to write file into chache with directory path and content dto be saved in the cache as input arguments
+	def write_into_file(self,path_of_dir, data_received):
+		filename = path_of_dir + "/filename3"
+		has_been_written = False
+		f = open(filename, 'w')
+		while not has_been_written:
+			f.write(data_received) 
+			has_been_written = True
+			f.close()			   
+
+
+##############################################################################################
+''' Instantiate  HTTP server, which will be running as a background process on replica  and run
+forever such that multiple requests can be handeled'''
+##############################################################################################	
+def server(http_port_number, http_origin_server_name):
+    an_http_replica_instance = HTTPServer(('', http_port_number), Handler_for_HTTP_Server)
+    an_http_replica_instance.serve_forever()   
+
+
+##############################################################################################
+''' Execution of HTTPScript starts from here'''
+##############################################################################################	   
+        
+try:
+	cmd_argument = sys.argv
+	minus_p_index = 1
+	minus_o_index = 3
+	total_mandatory_args = 5
+
+	#check validity of arguments
+	if (len(cmd_argument)!=5) or ('-p' != cmd_argument[1]) or ('-o' != cmd_argument[3]):
+		print 'Please provide correct port number and try again -  ./httpserver -p <port> -o <origin>'
+		sys.exit()
+	else: 
+	        http_port_number = int(cmd_argument[2])
+	    	http_origin_server_name = cmd_argument[4]
+
+	server(http_port_number, http_origin_server_name)
+
+except:
+	print "Error occured, please try again"

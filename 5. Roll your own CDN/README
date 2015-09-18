@@ -1,0 +1,155 @@
+************************************************************************************************************************************
+High Level Approach
+************************************************************************************************************************************
+
+Following components have been submitted by our team for the final submission:
+1. DNS Server        (filename - dnsserver)
+2. mapping script    (filename - mapping script.py)
+3. HTTP clients      (filename - httpserver)
+4. deployCDN/ runCDN / stopCDN 
+
+1. DNS Server
+When the DNS recives a request from a client, it pasrses request and maps client to "good" replica servers. We have written a script, separate from dnsserver, to implement this functionality and named this file to 'mappingscript.py'.We parse arguments for dnsserver file using 'getopt' module. We have used 'SocketServer' for providing network server feature importing following two classes-
+(i) BaseRequestHandler,
+(ii) UDPServer
+
+After filtering out command line arguments first of all we create a request handler class - Datagram_DNS_Server_Handler,  by subclassing the BaseRequestHandler class. We override its handle() method, which processes incoming requests. In the next step we instantiated UDPServer class, passing it the server’s address and the request handler class. Once it is set up, we call serve_forever() method of the server object for processing multiple requests.
+
+We proceed with unpacking the request to retrieve question name and question type. When value for question type field comes out to be 1 (representing A records:hosts address), we also check if the value for question-name field of DNS matches with the CDN name provided as a commnd line arguments. If match occurs it makes a call to the 'mappingscript.py' to map to "good" replica server based on the IP geolocations. It is an extension of DNS model, what we submitted during milestone, here instead of returning hard-coded IP of one replica we qualify one server to be "good" replica and return to the client.
+
+We are getting location (latitude/longitude) of the client server using 'api.hostip.info' API and finding difference between geo-locations using trigonometry, not the euclidean distance formula for finding distance between two points.We use generators, instead of iteration, to enhance performance while going over each ec2 replica server to calculate best IP. It increases perforamce by exploiting on demand generation of values, which translates to lower memory usage. And also we do not need to wait until all the elements have been generated before we start to use them. This is similar to the benefits provided by iterators, but the generator makes building iterators easy. This way, using exogenous information, we are able to get the IP address of the "good" server such that is it returned to the client while DNS redirection. Once we get IP address of "good" replica, and the question-name of DNS, we pack it into a DNS answer and sends to the client.
+
+2. HTTP client
+An instance of this HTTP servers is going to be deployed separately on all replica servers. It is responsible for delivering the requested content to clients. We build HTTP servers using following two classes classed from BaseHTTPServer module:
+(i)  HTTPServer
+(ii) BaseHTTPRequestHandler
+
+After parsing arguments we create a request handler class - Handler_for_HTTP_Server, subclassing the BaseHTTPRequestHandler class. We override its do_GET() method to process the requests for downloading content. Then we create an instance of http server, and set it to run forever by calling serve_forever() method which enable HTTP server to process multiple requests. When a client requests for a file for the first time, the file gets downloaded from the origin to the the cache, and then it is dowloaded in the current directory of the client. We have enhanced the milestone version of HTTP client implementing LFU (Least Frequently Used) functionality. 
+
+CDN performance is broadly influenced by three factors :
+1) Server load
+2) Content at that server
+3) Network conditions
+
+Since Zipf-like graph discussed in class (and referred on assignment 5 page) helped us to realize that most of the traffic is present in the network for the most popular content. So content has been managed at the server throgh caching, our design decision and architecture for this technique of enhancing performance of CDN is as below:
+
+Assumption for cache:
+* Path of the requested file on origin server is used to distinguish the location of files on the cache. i.e. location of each file is unique in cache folder.
+* Name of the cache folder starts with the first name of the path of the requested file.
+* There exists a sub-directory for each slash ('/') present in the path, i.e. name between two slashes ('/') is assigned as the directory-name.
+* Name of the last subdirectory is the name of file, and this folder contains a requested file. And name of the saved file is - 'filename3'.
+* Maintaining a dictionary (frequency_dictionary ={}), to implement LFU -Least Frequently Used, a cache algorithm used to manage memory within a computer.
+* If the value of Y (Y = current size of the cache and the size of content requested for download) exceeds 10MB, then the least-frequently-used file is deleted from the cache as well from the dictionary variable until the value of Y obtained in less than 10MB.
+* If the file, requested by a client, already exists in the cache of the server, then this file gets downloaded to the current directory of the client from the cahce (not from the origin).
+* If the requested content size if more than 10 MB it'l never be saved in that cache and no efforts will be made by our program to remove content from the cache folder to make place for it. Such contents will be everytime downloaded from the origin
+
+For example, if the path of a requested file is "wiki/Main_Page". While caching, the 'Main_Page' file is going to be saved in the following way:
+ 
+  ###############                   #############                ##############
+  #             #                   #           #                #            #
+  #     wiki    #    contains       # Main_Page #      contains  #  filename3 #
+  #             #                   #           #                #            #
+  ###############                   #############                ##############
+
+(Parent Directory)                 (Sub-directory)        (file content is saved in 'filename3' file)  
+
+
+For example, if the path of a requested file is "wiki/Overview". While caching, the 'Overview' file is going to be saved in the following way:
+ 
+  ###############                   #############                ##############
+  #             #                   #           #                #            #
+  #     wiki    #    contains       # Overview  #      contains  #  filename3 #
+  #             #                   #           #                #            #
+  ###############                   #############                ##############
+
+(Parent Directory)                 (Sub-directory)        (file content is saved in 'filename3' file)  
+
+We have used 'urllib2' library for downloading a file, 'os' lirbary for implementing cache functionality, and 'shutil' library for deleting folders from the cache.
+
+3.Deply/Run/Stop scripts :
+Code can be deployed/run/stopped using following scripts using SSH key-based authentication:
+
+3.1 deployCDN :
+* It copies httpclient to all replcas.
+* It copies two files (a) dnsserver and (b) mappingscript.py to the cs5700cdnproject.ccs.neu.edu host based on the user name and other arguments provided as command line arguments.
+
+It can be run using following syntax:
+	
+	./deployCDN -p <port> -o <origin> -n <name> -u <username> -i <keyfile>
+
+where port      -> a high-numbered port (40000-65535), assuming that HTTP server will run on the same port that you specify here.
+      origin    -> ec2-52-4-98-110.compute-1.amazonaws.com
+      name      -> the CDN-specific name that is translated to an IP (checked for the value 'cs5700cdn.example.com')
+      username  -> the account name you use for logging in
+      keyfile   -> is the path to the private key you use for logging into nodes.
+
+
+3.2 runCDN :
+*  It calls HTTP server using
+	chmod +x httpserver
+	./httpserver -p <port> -o <origin>
+
+* It calls DNS server called using:
+        chmod +x dnsserver
+	./dnsserver -p <port> -n <name>	
+
+It can be run using following syntax:
+	
+	./runCDN -p <port> -o <origin> -n <name> -u <username> -i <keyfile>
+
+where port, origin, name, username, keyfile are same as discussed in 3.1
+
+
+3.3 stopCDN
+* It kills python processes for httpserver and dnsserver
+
+	./runCDN -p <port> -o <origin> -n <name> -u <username> -i <keyfile>
+
+where port, origin, name, username, keyfile are same as discussed in 3.1
+
+
+************************************************************************************************************************************
+Challenges Faced
+************************************************************************************************************************************
+
+It took us around two days just to understand the requirements. Particularly the requirement for DNS server was not clear to us even after reaing questiong four to  five times. And we were searcing answers for questions like how the separate entities like EC2 machines, DNS and HTTP servers, and mapping script will be communicating to each other. Once we were good with the requirements we looked for the deliverables for the milestone, and realized that it was base of this project, which can easily be enhanced funtionality wise and easily made scalable for ec2 machines. We would not say requirements were tough to understand or it was not clear mentioned, but unlike previous projects there were many connecting components to be delivered, which are bound to work together. We could not start working on this project until we were clear with the architecture. Once we got hold of it, we planned to start with the DNS server first. 
+
+
+First step to start with DNS server was creating a request handler class - Datagram_DNS_Server_Handler,by subclassing the BaseRequestHandler class. We understood the rules for overriding handle() method for processes incoming requests but faced issues while instantiating UDPServer class, we did not know about the format of passing it the server’s address and the request handler class. Next challenging part of creating DNS server was to get 'question type' and 'question-name' of the request, we searched for the complete format of the question header and could successfully obtained the respective values while unpacking client request. Secondly, we were facing problem while packing the the 'question-name' into the DNS answer, and realized that we nedd to pack 'question-name' and 'IP address' separately. We started developing the escript for DNS server using class, but later realized that execution time was more than writing scripts straight away in methods without classes, since it was a competition based project we finally came up with the methods, without classes, declaring reusable variables publically.
+
+Initially we implemented 'GeoIP' API for GeoIP for mapping between IP address and location, but while debugging it was found that out of four times, once it was taking unexpectedly longer time to fetch location. Then we decided to use other API i.e. 'api.hostip.info' , relatively faster than our previous one, to return "good" server to the client while performing NS redirection.
+
+How to implement handlers, and override their methods was clear to us, so we found relatively easy to develop script for the HTTP server. urlilb2 library made our task simple for downloading the file. While working on http server most of our efforts was spent on managing the cache functionality. We had to come up with a logic which can uniquely distinguish requested links from each other. The directory management technique for cache has been discussed above. None of us had really worked on the LFU (Least Frquently Used) memory management technique. So we came with the flow chart for different scenarios and materialized into our script using dictionaries (discussed in previous topic) and 'os' library responsible for checking current directory path, creating folders etc. Testing for the same was also challenging because everytime we downloaded a had to debug the code if directories and folders in cache are in sync with each other or not. Instead of donwloading content of toal 10 MB we chnged out script to .5 MB and found our logic perfectly, later we tested for 1 MB and once all conditions of our flow diagram was tested thoroughly and separately by both of us we enhanced for 10 MB limit.
+
+Although we did not face any difficulty while preparing deployCDN script but for runCDN we had to start a process on DNS sever and another on HTTP, so the syntax for running a process in background of a server was new for us, we fixed this issue using 'nohup' and could successfully run processes on background of respective servers. 
+
+************************************************************************************************************************************
+Each team member contribution
+************************************************************************************************************************************
+
+*****Contribution by team-members****
+Shaalini was primarily responsible for the follwing tasks:
+* Gathering complete information about DNS packes- like how to pack/unpack requests.
+* Implemented the functionality for abstracting question name while unpacking the request.
+* Implemented BaseRequestHandler for processing the requested received by the DNS server.
+* Prepared flow diagram for managing cache using LFU technique. 
+* Integrated 'api.host.info' into mapping script for retrieving loaction (lat./long.)
+* Parsing command line arguments for the HTTP client.
+* Downloaded file using python library.
+* Tested functionality for caching.
+* Prepared deployCDN, and stopCDN scripts and Makefile
+
+
+Vikas was primarily responsible for the following tasks:
+* unpacking request received by the DNS and packing domain name and ip address to construct DNS answer.
+* Designing the layout/flow/architecture for the DNS server.
+* Parsing command lne arguments of the DNS script.
+* Designed architecture/flow of the HTTP program
+* Implementing BaseHTTPRequestHandler for processing the requests received.
+* Implemented the cache functionality.
+* Responsible for performing UNIT testing.
+* Tested functionality for caching.
+* Prepared runCDN scripts
+* Prepared README file
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+If we had time we would have implemented multithreaded HTTP server to serve multiple clients at once thus improving the performance. When content is available in the CDN, it is meant to be available for the clients so we would have implemented functionality to made it available over IPV4 and IPV6 as well.

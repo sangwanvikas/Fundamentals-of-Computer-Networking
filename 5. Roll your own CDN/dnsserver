@@ -1,0 +1,166 @@
+#!/usr/bin/env python
+''' imported lirbaries'''
+import sys
+import struct
+import getopt
+''' import mappingscript - used for geo measurement '''
+import mappingscript
+import random
+import socket
+''' import BaseRequestHandler and UDPServer classes from SocketServer library '''
+from SocketServer import BaseRequestHandler, UDPServer
+
+##############################################################################################
+''' Variable Section'''
+##############################################################################################
+
+''' CONSTANTS '''
+set_initial_value_to_zero = 0
+set_initial_str_value = ''
+range_max_value = 65535
+
+
+''' Formating Headers - used while unpacking DNS quest and packing DNS answer '''
+DNS_packet_format = '!HHHHHH'
+question_header_format = '!HH'
+ip_header_format = '!HHHLH4s'
+
+
+''' DNS header variables '''
+dns_recognition_number = random.randint(set_initial_value_to_zero, range_max_value)
+dns_header_flags = dns_quer_resp_total = dns_auth_ans_total = dns_name_serv_total = dns_addi_rec_total = set_initial_value_to_zero
+
+
+''' DNS Query variables '''
+dns_question_title = set_initial_str_value
+dns_ques_category = dns_question_class = set_initial_value_to_zero
+
+
+''' DNS answer variables '''
+self_answer_title = self_answer_category = dns_answer_class = dns_time_to_live = payload_to_be_sent = dns_packet_length = set_initial_value_to_zero
+
+
+##############################################################################################
+''' Method to unpack DNS QQuery '''
+##############################################################################################
+
+''' unpacks DNS query and retrieves question name '''
+def get_question_name(content_to_be_parsed):
+    ''' global variables '''
+    global dns_ques_category, dns_recognition_number, dns_quer_resp_total, dns_name_serv_total, dns_addi_rec_total,dns_ques_category, dns_question_class
+    off_set_to_sep_data_from_header = 12
+    off_set_to_get_ques_type_and_class = -4
+    codition_Holds_True = True
+
+    ''' unpacked header values '''
+    [dns_recognition_number, dns_header_flags, dns_quer_resp_total, dns_auth_ans_total, dns_name_serv_total, dns_addi_rec_total] = struct.unpack(DNS_packet_format, content_to_be_parsed[:off_set_to_sep_data_from_header])
+    data_without_header = content_to_be_parsed[off_set_to_sep_data_from_header:]
+
+    ''' unpack query values '''
+    unpack_question_values = struct.unpack('!HH', data_without_header[off_set_to_get_ques_type_and_class:])
+    dns_ques_category = unpack_question_values[0]
+    dns_question_class = unpack_question_values[1]
+    str_val = data_without_header[:off_set_to_get_ques_type_and_class]
+    index_variable = set_initial_value_to_zero
+    bucket_to_parse_ques_name = []
+
+    ''' abstract question name '''
+    while codition_Holds_True:
+        value_of_byte_for_string = ord(str_val[index_variable])
+        if value_of_byte_for_string == set_initial_value_to_zero:
+            break
+        index_variable = index_variable + 1
+        last_index = index_variable + value_of_byte_for_string
+        bucket_to_parse_ques_name.append(str_val[index_variable:last_index])
+        index_variable = index_variable + value_of_byte_for_string
+    dns_question_title = '.'.join(bucket_to_parse_ques_name)
+
+    return dns_question_title
+
+
+##############################################################################################
+''' Method to pack DNS answer'''
+##############################################################################################
+
+''' pack question name and ip address to form a Response Record i.e. DNS answer '''
+def prepare_answer(name_to_be_packed, ip_to_be_packed):
+        
+        ''' first step -  pack question_name '''
+        packed_name_value = struct.pack('!HHHHHH', dns_recognition_number, int(hex(33152),16), dns_quer_resp_total, 1, dns_name_serv_total, dns_addi_rec_total)
+        symbol_for_end = '\x00'
+        concatenated_value = ''.join(chr(len(lambda_variable)) + lambda_variable for lambda_variable in name_to_be_packed.split('.')) + '\x00' + struct.pack('!HH', dns_ques_category, dns_question_class)
+        packed_name_value = packed_name_value + concatenated_value
+
+        ''' second step - pack IP address '''
+        packed_ip_value = struct.pack(ip_header_format, int(hex(49164),16), 1, 1, 60, 4, socket.inet_aton(ip_to_be_packed))
+        dns_packet = packed_name_value + packed_ip_value
+
+        return dns_packet
+
+
+##############################################################################################
+''' DNS Server handler section'''
+##############################################################################################
+
+''' Handler for DNS server '''
+class Datagram_DNS_Server_Handler(BaseRequestHandler):
+    ''' override handle() method '''
+    def handle(self):
+        content_received = self.request[0].strip()
+        value_of_socket = self.request[1]
+        dns_question_title = get_question_name(content_received)
+        content_to_be_sent = content_received
+        # print dns_question_title , self.server.cdn_from_cmd_line,dns_ques_category
+
+        if (dns_question_title == self.server.cdn_from_cmd_line) and (dns_ques_category == 1):
+            content_to_be_sent = prepare_answer(dns_question_title, mappingscript.initiate_mapping_script(str(self.client_address[0])))
+            value_of_socket.sendto(content_to_be_sent, self.client_address)
+        else:
+            value_of_socket.sendto(content_to_be_sent, self.client_address)
+
+
+##############################################################################################
+''' Datagram DNS Server - it's instance will as a background process on DNS server '''
+##############################################################################################
+
+''' DNS Server '''
+class Datagram_DNS_Server(UDPServer):
+    def __init__(self, s_info, name_of_CDN, handler_class=Datagram_DNS_Server_Handler):
+        self.cdn_from_cmd_line = name_of_CDN
+        ''' invoke Default constructor of UDPServer class '''
+        UDPServer.__init__(self, s_info, handler_class)
+        return
+ 
+
+##############################################################################################
+''' Execution of DNS script starts from here - parsing command line argumnets'''
+##############################################################################################
+
+''' logic for parsing command line arguments '''
+# try:    
+empty_string = ''
+udp_port_number = 0
+name_of_CDN = empty_string
+const_for_minus_p = '-p'
+const_for_minus_n = '-n'
+
+command_line_text = getopt.getopt(sys.argv[1:], 'p:n:')
+
+operators_in_command_line = command_line_text[0]
+command_line_args = command_line_text[1]
+
+for an_operator, an_arg in operators_in_command_line:
+    if an_operator == const_for_minus_p:
+        udp_port_number = int(an_arg)
+    elif an_operator == const_for_minus_n:
+        name_of_CDN = an_arg
+    else:
+        print "enter arguments in the correct format"
+        sys.exit(0)
+
+''' Instantiate DNS Server class '''
+instance_of_dnsserver = Datagram_DNS_Server((empty_string, udp_port_number),name_of_CDN)
+''' RUN DNS server forever to handle multiple requests  '''
+instance_of_dnsserver.serve_forever()
+# except:
+#     print "Error occured, Please try again !"

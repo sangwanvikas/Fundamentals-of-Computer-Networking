@@ -1,0 +1,549 @@
+#!/usr/bin/env python
+import socket
+import sys
+# used for packing and unpacking packets
+import struct
+# used for implementing time out functionality
+import time 
+# used to get random port numbers everytime program is run
+import random
+#used to get destination IP address
+import subprocess
+
+''' Global variables used throughout he project'''
+No_of_RT_to_be_ACKed = 0 
+j = 0
+port = 80
+initial_seq_number = 0
+initial_ACK_number = 0
+user_data = ""
+minimum_cwnd_size = 0
+maximum_cwnd_size = 1000
+current_cwnd_size = 1
+
+''' required for ensuring ordered delivery of packets '''
+old_seq = 0
+old_data_len = 0
+
+''' Following variables are set when execution starts '''
+linkForFileToBeDownloaded = ""
+source_ip = ""
+dest_ip =""
+data_size_not_zero = 6
+
+########################################################################################################################
+# initialize socket
+########################################################################################################################
+global sock
+try:
+    sock = socket.socket(socket.AF_PACKET,socket.SOCK_RAW, socket.IPPROTO_RAW)
+    sock.bind(("eth0",0))
+except socket.error , msg:
+    print 'Socket could not be created. Error Code : ' + str(msg[0]) + ' Message ' + msg[1]
+    sys.exit(0)
+
+########################################################################################################################
+# Helper Methods -  will be used throughout the code
+########################################################################################################################
+
+''' pcked into IP header using !BBHHHBBH4s4s format '''
+def createIPHeader(ihl_ver_of_ip, tos_of_ip, tot_length_of_ip, id_of_ip_pkt, fragm_off_of_ip, ttl_of_ip, protocol_of_ip, chksum_of_ip, source_add_of_ip, dest_add_of_ip):
+    return struct.pack('!BBHHHBBH4s4s' , ihl_ver_of_ip, tos_of_ip, tot_length_of_ip, id_of_ip_pkt, fragm_off_of_ip, ttl_of_ip, protocol_of_ip, chksum_of_ip, source_add_of_ip, dest_add_of_ip)
+
+''' pcked into TCP header using !HHLLBBHHH format '''
+def createTCPHeader(source_of_tcp, dest_of_tcp, seq_of_tcp, ack_seq_of_tcp, offset_res_of_tcp, flags_of_tcp,  window_of_tcp, check_of_tcp, urg_of_tcp_ptr):
+    return struct.pack("!HHLLBBHHH" , source_of_tcp, dest_of_tcp, seq_of_tcp, ack_seq_of_tcp, offset_res_of_tcp, flags_of_tcp,  window_of_tcp, check_of_tcp, urg_of_tcp_ptr)
+
+''' pcked into Pseudo Header using !4s4sBBH format '''
+def createPseudoHeader(source_address , dest_address , placeholder , protocol , tcp_length):
+    return struct.pack('!4s4sBBH' , source_address , dest_address , placeholder , protocol , tcp_length)
+
+########################################################################################################################
+# Code to get gateway MAC address
+########################################################################################################################
+''' returns ARP packet - packed with the help of source IP, source MAC address and target MAC address'''
+def prepare_ARPHeader(sender_mac_address, sender_IP_protocol_address,target_mac_address,target_IP_protocol_address):
+        hardware_type = int(hex(1),16)
+        protocol_type = int(hex(2048),16)
+        hardware_length = int(hex(6),16)
+        protocol_length = int(hex(4),16)
+        # Specifies the operation that the sender is performing: 1 for request, 2 for reply.
+        operation = int(hex(1),16)
+        arp_pkt = struct.pack('!HHBBH6s4s6s4s',hardware_type, protocol_type, hardware_length, protocol_length,operation,sender_mac_address, sender_IP_protocol_address,target_mac_address,target_IP_protocol_address)
+        return arp_pkt
+
+''' returns ETHERNET packet - packed with the help of sender MAC address , target MAC address and ARP packet'''
+def prepare_EthernetHeader(target_mac_address, sender_mac_address, arp_pkt):
+        ether_type = int(hex(2054),16)
+        header_of_eth = struct.pack('!6s6sH',target_mac_address, sender_mac_address, ether_type)
+        eth_pkt = ''.join([header_of_eth, arp_pkt])
+        return eth_pkt
+
+''' returns source MAC address using socketName.getsockname() method'''
+def get_source_mac():
+    socket_to_get_source_mac = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+    socket_to_get_source_mac.bind(("eth0",socket.SOCK_RAW))
+    name_of_interface,protocol_of_interface,type_of_packet,type_of_hardware,mac_addr_of_source = socket_to_get_source_mac.getsockname()
+    return mac_addr_of_source
+
+''' returns gateway IP using subprocess library - which helpes in running an OS command from my Python program '''
+def get_gateway_ip(iface):
+    shell_value = True
+    standard_output = subprocess.PIPE
+    parameter_1_value = "ip r l"
+    values_from_subprocess_cmd = subprocess.Popen(parameter_1_value, shell=shell_value, stdout=standard_output).communicate()
+    values_at_0_index = values_from_subprocess_cmd[0]
+    split_values_by_space = values_at_0_index.split(' ')
+    second_elem_as_ip_of_gateway = split_values_by_space[2]
+    return  second_elem_as_ip_of_gateway
+
+''' returns gateway mac address sending ARP packet using ethernet frame'''
+def get_gateway_mac_helper(interface,sender_IP_protocol_address,sender_mac_address,target_IP_protocol_address):
+        ff_value  = int('FF', 16)
+
+        ''' broadcasst message for mac address '''
+        target_mac_address = struct.pack('!6B',ff_value,ff_value,ff_value,ff_value,ff_value,ff_value)
+
+        arp_pkt = prepare_ARPHeader(sender_mac_address, sender_IP_protocol_address,target_mac_address,target_IP_protocol_address)
+
+        header_of_eth = prepare_EthernetHeader(target_mac_address, sender_mac_address, arp_pkt)
+        eth_pkt = ''.join([header_of_eth, arp_pkt])
+        
+        # bind this socket for "eth0"
+        sock.bind(("eth0",socket.SOCK_RAW))
+        # send ethernet packet, so that MAC address of gateway can be retrieved from its response.
+        sock.send(eth_pkt)
+
+        # we store the size of struct, will be used while unpacking the packets, corresponding to the given format.
+        length_of_eth_header = struct.calcsize('!6s6sH')
+        length_of_arp_header = struct.calcsize('!HHBBH6s4s6s4s')
+
+        while True:
+            packet =  sock.recv(65565)
+            # unpack eth_packet
+            eth_field = struct.unpack('!6s6sH', packet[:length_of_eth_header])
+
+            if eth_field[2] == 2054:
+                break
+        # unpack arp packet from eth packet
+        fields_of_arp = struct.unpack('!HHBBH6s4s6s4s', packet[length_of_eth_header:][:length_of_arp_header])
+        # 5th field is source h/w address , 6th field is source protocol add,
+        # 7th field is target h/w add, and 8th is target protocol address
+        gateway_mac_add = fields_of_arp[5]
+        return gateway_mac_add
+
+''' method to set three global variables 1. sender_IP_protocol_address, 2.sender_mac_address, 3.target_IP_protocol_address'''
+def get_gateway_mac(interface):
+    global sender_IP_protocol_address, sender_mac_address, target_IP_protocol_address
+    sender_IP_protocol_address = socket.inet_aton(source_ip)
+    sender_mac_address = get_source_mac()
+    target_IP_protocol_address = socket.inet_aton(get_gateway_ip(interface))
+    gateway_mac_address =get_gateway_mac_helper(interface,sender_IP_protocol_address,sender_mac_address,target_IP_protocol_address)
+    return gateway_mac_address
+
+########################################################################################################################
+#### Prepare HTTP Header
+########################################################################################################################
+''' used to create HTTTP header - while requesting data to the server for the requested URL - a global variable'''
+def prepare_HTTPHeader():
+    global user_data, message_len
+    httpHeader = "GET " + completeLink + " HTTP/1.0\r\n\r\n"
+    user_data = httpHeader
+    message_len = len(httpHeader)
+
+''' used to create HTTP header for empty string - it is used while sending ACK / FINC ACK to the server '''
+def prepare_Empty_HTTPHeader():
+    global user_data 
+    user_data = ""
+
+########################################################################################################################
+#### Prepare TCP Header
+########################################################################################################################
+''' method to calcualte checksum for the imput message'''
+def checksum(message):
+    counter = 0
+    sumValue = 0
+    msglength = len(message)
+    msg_size_limit = 2
+    
+    while msglength >= msg_size_limit:
+        w = (ord(message[counter+1]) << 8 ) + ord(message[counter]) 
+        sumValue = sumValue + w
+        counter= counter + msg_size_limit
+        msglength = msglength - msg_size_limit
+    if msglength == 1:
+        sumValue = sumValue + ord(message[counter])
+
+    carry = (sumValue >> 16) + (sumValue & 0xffff);
+    sumValue = carry + (carry >> 16);
+    sumValue = ~sumValue & 0xffff
+    return sumValue
+
+''' method to create TCP header - i/p parameters vary for ACK, FIN ACK, request for retransmission etc..'''
+def prepare_TCPHeader(source_of_tcp_p,dest_of_tcp_p, seq_of_tcp_p, ack_seq_of_tcp_p,d_off_tcp_p,fin_of_tcp_p,syn_of_tcp_p, rst_of_tcp_p, psh_of_tcp_p, ack_of_tcp_p, urg_of_tcp_p, window_of_tcp_p, check_of_tcp_p, urg_of_tcp_ptr_p ):
+    # TCP Header Section
+    # source port
+    source_of_tcp = source_of_tcp_p   
+    # destination port
+    dest_of_tcp = dest_of_tcp_p   
+    seq_of_tcp = seq_of_tcp_p
+    ack_seq_of_tcp = ack_seq_of_tcp_p
+    d_off_tcp = d_off_tcp_p    
+    #tcp flags
+    fin_of_tcp = fin_of_tcp_p
+    syn_of_tcp = syn_of_tcp_p
+    rst_of_tcp = rst_of_tcp_p
+    psh_of_tcp = psh_of_tcp_p
+    ack_of_tcp = ack_of_tcp_p
+    urg_of_tcp = urg_of_tcp_p
+    #   size of max allowed window size
+    window_of_tcp = socket.htons (window_of_tcp_p)    
+    check_of_tcp = check_of_tcp_p
+    urg_of_tcp_ptr = urg_of_tcp_ptr_p
+
+    offset_res_of_tcp = (d_off_tcp << 4) + 0
+    flags_of_tcp = fin_of_tcp + (syn_of_tcp << 1) + (rst_of_tcp << 2) + (psh_of_tcp <<3) + (ack_of_tcp << 4) + (urg_of_tcp << 5)
+
+    tcp_header = createTCPHeader (source_of_tcp, dest_of_tcp, seq_of_tcp, ack_seq_of_tcp, offset_res_of_tcp, flags_of_tcp,  window_of_tcp, check_of_tcp, urg_of_tcp_ptr)
+    prepare_PseudoHeader(tcp_header, source_of_tcp, dest_of_tcp, seq_of_tcp, ack_seq_of_tcp, offset_res_of_tcp, flags_of_tcp,  window_of_tcp, check_of_tcp, urg_of_tcp_ptr)
+    
+''' Prepare PSEUDO Header, and make a call to 'prepare_Packet' '''
+def prepare_PseudoHeader(tcp_header_p, source_of_tcp, dest_of_tcp, seq_of_tcp, ack_seq_of_tcp, offset_res_of_tcp, flags_of_tcp,  window_of_tcp, check_of_tcp, urg_of_tcp_ptr):
+    global tcp_header
+    source_address = socket.inet_aton( source_ip )
+    dest_address = socket.inet_aton(dest_ip)
+    placeholder = 0
+    protocol = socket.IPPROTO_TCP
+    tcp_length = len(tcp_header_p) + len(user_data)
+    psh = createPseudoHeader(source_address , dest_address , placeholder , protocol , tcp_length)
+    psh = psh + tcp_header_p + user_data;
+    check_of_tcp = checksum(psh)
+    # now put correct checksum into re-created tcp header.
+    tcp_header = struct.pack('!HHLLBBH' , source_of_tcp, dest_of_tcp, seq_of_tcp, ack_seq_of_tcp, offset_res_of_tcp, flags_of_tcp,  window_of_tcp) + struct.pack('H' , check_of_tcp) + struct.pack('!H' , urg_of_tcp_ptr)
+    tcp_header = ''.join([tcp_header, user_data])
+    
+########################################################################################################################
+#### Prepare IP Header
+########################################################################################################################
+def checksum2(message):
+    msglength = len(message)
+    sumValue = 0
+    msg_size_limit = 2
+    # pick 2 words
+    for counter in range(0, msglength, msg_size_limit):
+        if counter < msglength and (counter + 1) < msglength:
+            sumValue += (ord(message[counter]) + (ord(message[counter + 1]) << 8))
+        elif counter < msglength and (counter + 1) == msglength:
+            sumValue += ord(message[counter]) 
+
+    carry = (sumValue & 0xffff) + (sumValue >> 16)
+    sumValue = (~ carry) & 0xffff
+    sumValue = sumValue >> 8 | ((sumValue & 0x00ff) << 8)
+    return sumValue
+
+def prepare_IPHeader():
+    global ip_header
+    ihl_of_ip = 5
+    ver_of_ip = 4
+    tos_of_ip = 0
+    tot_length_of_ip = 0 
+    id_of_ip_pkt = 54321 
+    fragm_off_of_ip = 0
+    ttl_of_ip = 225
+    protocol_of_ip = socket.IPPROTO_TCP
+    chksum_of_ip = 0 
+    source_add_of_ip = socket.inet_aton ( source_ip )  
+    dest_add_of_ip = socket.inet_aton ( dest_ip )     
+    ihl_ver_of_ip = (ver_of_ip << 4) + ihl_of_ip
+    tot_length_of_ip = 4 * ihl_of_ip + len(tcp_header)     
+    ip_header = createIPHeader (ihl_ver_of_ip, tos_of_ip, tot_length_of_ip, id_of_ip_pkt, fragm_off_of_ip, ttl_of_ip, protocol_of_ip, chksum_of_ip, source_add_of_ip, dest_add_of_ip)
+    ip_checksum =  checksum2(ip_header)
+    ip_header = createIPHeader (ihl_ver_of_ip, tos_of_ip, tot_length_of_ip, id_of_ip_pkt, fragm_off_of_ip, ttl_of_ip, protocol_of_ip, ip_checksum, source_add_of_ip, dest_add_of_ip)
+    ip_header = ''.join([ip_header, tcp_header])
+
+##########################################################################################################################
+# Prepare ETHERNET headr
+##########################################################################################################################
+''' method returns ETHERNET frmae'''
+def prepare_EthernetHeader_with_ip():
+    global eth_header
+    ether_type = int(hex(2048),16) #ox0806
+    header_of_eth = struct.pack('!6s6sH',mac, sender_mac_address, ether_type)
+    eth_header = ''.join([header_of_eth, ip_header])
+
+########################################################################################################################
+#### SEND PACKET
+########################################################################################################################
+''' method is responsible for sending packet to the server'''
+def send_packet():
+    global lastPacketSentTime
+    sock.bind(("eth0",0))
+    sock.send(eth_header)
+    lastPacketSentTime = time.time()
+    
+#########################################################################################################################
+## code - to receive data from the server
+#########################################################################################################################
+''' unpacks data received from the server'''
+def receive_data_from_server():
+    global acknowledgement, sequence,  old_data_len, old_seq, No_of_RT_to_be_ACKed, j, current_cwnd_size, maximum_cwnd_size
+    packet = ''
+    ''' open a file in aooend mode and write relevant data into it removing header dynamically '''
+    f = open(downloadedFileToBeNamed,'a')
+    # sys.exit(0)
+    while True:
+        if (time.time() - lastPacketSentTime) > 180:
+                print "Program, rawhttpget, does not receive any data from the remote server for three minutes. Please retry again."
+                sys.exit(0)
+
+        packet = sock.recvfrom(65565)
+        packet = packet[0]
+
+        ''' unpack data from ethernet '''
+        eth_hdr_len = struct.calcsize('!6s6sH')
+        eth_headers = packet[:eth_hdr_len]
+        eth_fields = struct.unpack('!6s6sH', eth_headers)
+        eth_dest_addr = eth_fields[0]
+        eth_src_addr = eth_fields[1]
+        eth_tcode = eth_fields[2]
+        data = packet[eth_hdr_len:]
+        
+        ''' unpack data from ip '''
+        ip_header = packet[eth_hdr_len:eth_hdr_len + 20]
+        iph = struct.unpack('!BBHHHBBH4s4s' , ip_header)
+        version_ihl = iph[0]
+        version = version_ihl >> 4
+        ihl = version_ihl & 0xF
+        iph_length = ihl * 4
+        ttl = iph[5]
+        protocol = iph[6]
+        s_addr = socket.inet_ntoa(iph[8]);
+        d_addr = socket.inet_ntoa(iph[9]);
+        tcp_header = packet[iph_length+eth_hdr_len:eth_hdr_len+iph_length+20]
+
+
+        ''' unpack data from the tcp '''
+        tcph = struct.unpack('!HHLLBBHHH' , tcp_header)
+        source_port = tcph[0]
+        dest_port = tcph[1]
+        sequence = tcph[2]
+        acknowledgement = tcph[3]
+        doff_reserved = tcph[4]
+        tcp_flg = tcph[5]
+
+        ''' unpack tcp flag values '''
+        # flag_fin, flag_syn, flag_rst,flag_psh, flag_ack, flag_urg = retrieve_flag_values(tcp_flg)
+        flag_fin = tcp_flg & int(hex(1),16)
+        flag_syn = (tcp_flg >> 1) & int(hex(1),16)
+        flag_rst = (tcp_flg >> 2) & int(hex(1),16)
+        flag_psh = (tcp_flg >> 3) & int(hex(1),16)
+        flag_ack = (tcp_flg >> 4) & int(hex(1),16)
+        flag_urg = (tcp_flg >> 5) & int(hex(1),16)
+
+
+        tcph_length = doff_reserved >> 4
+        h_size = eth_hdr_len + iph_length + tcph_length * 4
+        data_size = len(packet) - h_size
+        data = packet[h_size:]
+
+        protocol = socket.IPPROTO_TCP
+        tcp_length = len(tcp_header) + len(data)
+        tcp_psh = createPseudoHeader(str(source_port) , str(dest_port) , 0 , protocol , tcp_length)
+        concat = tcp_psh + tcp_header + data
+
+        '''The received packet from the server was sent to the port number on which our rawhttp client program is running
+           It just ignores, irrelevant traffic'''
+        if (dest_port) == local_port and source_port == 80 and s_addr == dest_ip and d_addr == source_ip :
+            '''Receive SYN ACK from the server'''
+            if flag_ack == 1 and flag_syn==1:
+                '''store the sequence number in a variable, it will be used while ensuring in order delivery of the packets'''
+                old_seq = sequence + 1
+                break
+
+            ''' if data_size is non-zero and received packet contains valid checksum then it will send an ACK for those packets
+                which will be delivered in-order. And also size of current cwnd window must lie between 1 and 1000'''
+            if  data_size > data_size_not_zero and current_cwnd_size <= maximum_cwnd_size:
+                '''condition to check in-order delivery of the packets'''
+                if old_seq + old_data_len == sequence and checksum(ip_header) == 0:                    
+                    '''If a packet is ACKed within 1 minute it will receive data and send an ACK,
+                       else 'else' part of this program will run requesting for retransmission.'''
+                    if (time.time() - lastPacketSentTime) < 60:
+                        '''Logic to split data from the header - if value of an element at 0 index is not same as data => it contains \r\n\r\n,
+                           hence it contains header.'''
+                        if data.split('\r\n\r\n')[0] != data:
+                            data_containing_header = data.split('\r\n\r\n')[0]
+                            httpStatus = data_containing_header.split(' ')[1]
+                            ''' If header contains 200 ok !! '''
+                            if httpStatus == "200":
+                                f.write(data.split('\r\n\r\n')[1])
+                            else:
+                                print "Does not contain 200 ok !! Please try again."
+                                # sys.exit(0)
+                                break
+                        else:
+                            f.write(data)
+                        
+                        ''' save current sequence, and data size value in variables, will be required to check in-order delivery of the packets '''
+                        old_seq = sequence
+                        old_data_len = data_size
+                        j = j + 1
+
+                        '''counter to keep track of retransmissions requested by out client program.
+                           If a retransmitted packet is ACKed, just reduce by 1.'''
+                        if No_of_RT_to_be_ACKed > 0:
+                            No_of_RT_to_be_ACKed = No_of_RT_to_be_ACKed - 1
+
+                        ''' increment the cwnd after each succesful ACK, up to a fixed maximum of 1000'''
+                        if current_cwnd_size + 1 > minimum_cwnd_size and current_cwnd_size + 1 < maximum_cwnd_size:
+                            current_cwnd_size = current_cwnd_size + 1
+                        else:
+                            current_cwnd_size = 1
+
+                        Send_Data_ACK(sequence)
+                        ''' following else will run if a packet is not ACKed within 1 minute, assume the packet is lost and retransmit it '''
+                    else:
+                        Send_Data_ACK_Retransmit(old_seq)
+                else:
+                    if current_cwnd_size + 1 > minimum_cwnd_size and current_cwnd_size + 1 < maximum_cwnd_size:
+                        current_cwnd_size = current_cwnd_size + 1
+                    else:
+                        current_cwnd_size = 1
+                    No_of_RT_to_be_ACKed = 1
+                    # print "No_of_RT_to_be_ACKed is -------------------------------------------------->",No_of_RT_to_be_ACKed
+                    # print "expected", old_seq + old_data_len, "from server", sequence                    
+                    Send_Data_ACK_Retransmit(old_seq)
+            
+            # if FIN flag is set for the packet, which is being sniffed send back a FIN ACK
+            if flag_fin == 1 and No_of_RT_to_be_ACKed == 0 :
+                f.close()
+                Send_FIN_ACk()
+                break
+                sys.exit(0)
+          
+########################################################################################################################
+# Handels request to-and-from the SERVER
+########################################################################################################################
+''' Step 1 in 3 way handshake - set SYN 1 '''
+def Initiate_Step1_of_Handshake():
+    prepare_Empty_HTTPHeader()
+    prepare_TCPHeader(local_port,80,initial_seq_number,initial_ACK_number,5,0,1,0,0,0,0,5840,0,0)
+    prepare_IPHeader()
+    prepare_EthernetHeader_with_ip()
+    send_packet()
+
+''' Step 3 in 3 way handshake - set ACK 1 '''
+def Initiate_Step3_of_Handshake():
+    prepare_Empty_HTTPHeader()
+    prepare_TCPHeader(local_port,80, initial_seq_number + 1, sequence + 1, 5,0,0, 0, 0, 1, 0, 5840, 0, 0)
+    prepare_IPHeader()
+    prepare_EthernetHeader_with_ip()
+    send_packet()
+   
+''' set PUSH 1 and ACK 1 '''
+def Send_Data():
+    prepare_HTTPHeader()
+    prepare_TCPHeader(local_port,80, initial_seq_number + 1, int (sequence), 5,0,0, 0, 1, 1, 0, 5840, 0, 0)
+    prepare_IPHeader()
+    prepare_EthernetHeader_with_ip()
+    send_packet()
+ 
+''' set ACK 1 '''
+def Send_Data_ACK(seq_no):
+    prepare_Empty_HTTPHeader()
+    prepare_TCPHeader(local_port,80,initial_seq_number + 1 + message_len, seq_no + 1, 5,0,0, 0, 0, 1, 0, 5840, 0, 0)
+    prepare_IPHeader()
+    prepare_EthernetHeader_with_ip()
+    send_packet()
+
+''' set ACK 1 '''
+def Send_Data_ACK_Retransmit(seq_no):
+    prepare_Empty_HTTPHeader()
+    prepare_TCPHeader(local_port,80,initial_seq_number + 1 + message_len, seq_no +  old_data_len, 5,0,0, 0, 0, 1, 0, 5840, 0, 0)
+
+    prepare_IPHeader()
+    prepare_EthernetHeader_with_ip()
+    send_packet()
+    
+''' set FIN 1 and ACK 1 '''
+def Send_FIN_ACk():
+    prepare_Empty_HTTPHeader()
+    prepare_TCPHeader(local_port,80,acknowledgement, int (sequence) + 1, 5,1,0, 0, 0, 1, 0, 5840, 0, 0)
+    prepare_IPHeader()
+    prepare_EthernetHeader_with_ip()
+    send_packet()
+
+  
+###############################################################################################################################
+# Initialization : Entry point of the program
+###############################################################################################################################
+def start_execution():
+    Initiate_Step1_of_Handshake()
+    
+    receive_data_from_server()
+
+    Initiate_Step3_of_Handshake()
+    
+    Send_Data()
+
+    receive_data_from_server()
+
+''' find local IP local machine IP address '''
+def get_localhost_ip():
+    socketToFindHostIP = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    socketToFindHostIP.connect(("google.com", 0))
+    return socketToFindHostIP.getsockname()[0]
+
+try:
+    for i in xrange(1):
+        local_port = int('%04d' % random.uniform(2000, 65534))
+
+    if len(sys.argv) == 2:
+
+        downloadedFileToBeNamed = ""
+        completeLink = sys.argv[1]
+
+        # separate link by http://
+        linkArray = completeLink.split('http://')
+
+        # check if the link starts with 'http://'
+        if linkArray > 1 and linkArray[0] == "":
+            linkWithoutHttp = linkArray[1]
+            linkWithoutHttpSeparatedBySlash = linkWithoutHttp.split('/')
+
+            # if link does not contain any '/' then right after '//' become the serverHostName
+            if linkWithoutHttpSeparatedBySlash[0] == linkWithoutHttp:
+                downloadedFileToBeNamed = "index.html"
+                serverHostName = linkArray[1]
+                wwwServerHostName = serverHostName
+                fileNameIndexInLink = 0
+            else:
+
+                serverHostName = linkWithoutHttpSeparatedBySlash[0]
+                fileNameIndexInLink = len(linkWithoutHttpSeparatedBySlash)
+
+                # assign element as filename.extension
+                downloadedFileToBeNamed = linkWithoutHttpSeparatedBySlash[fileNameIndexInLink-1]
+                wwwServerHostName = serverHostName
+
+                # if last name is "" => if the link ends with '/' then set file name as "index.html"
+                if downloadedFileToBeNamed is "":
+                    downloadedFileToBeNamed = "index.html"
+
+            linkForFileToBeDownloaded = sys.argv[1][0]
+            # find SERVER IP address
+            dest_ip = socket.gethostbyname(wwwServerHostName)
+
+            # find local IP local machine IP address
+            source_ip = get_localhost_ip()        
+
+            mac = get_gateway_mac("eth0")
+            message_len = len("GET " + completeLink + " HTTP/1.0\r\n\r\n")
+            
+            start_execution()
+        else:
+            print "Error occured, pleae try again !!"
+
+    else:
+        print "Illegal number of arguments passed, please try again !!"
+except:
+    print "Error occured, please try to run again!"

@@ -1,0 +1,90 @@
+#!/usr/bin/env python
+import subprocess
+import getopt
+import sys
+
+#############################################################################################
+''' Variable section'''
+##############################################################################################	
+
+''' list of all replicas '''
+list_ec2_replicas = ["ec2-52-0-73-113.compute-1.amazonaws.com",
+"ec2-52-16-219-28.eu-west-1.compute.amazonaws.com",
+"ec2-52-11-8-29.us-west-2.compute.amazonaws.com",      
+"ec2-52-8-12-101.us-west-1.compute.amazonaws.com",        
+"ec2-52-28-48-84.eu-central-1.compute.amazonaws.com",
+"ec2-52-68-12-77.ap-northeast-1.compute.amazonaws.com",    
+"ec2-52-74-143-5.ap-southeast-1.compute.amazonaws.com",  
+"ec2-52-64-63-125.ap-southeast-2.compute.amazonaws.com",  
+"ec2-54-94-214-108.sa-east-1.compute.amazonaws.com"]
+
+#############################################################################################
+''' Class containing method, which is responsible for running system calls'''
+##############################################################################################	
+
+''' class contianing a method, which helps running system call in python '''
+class Deploy_Servers(object):
+	# subprocess is used here for calling system calls
+    def cmd_run(self, cmd):
+        self.cmd = cmd
+        subprocess.call(self.cmd, shell=True)
+
+#############################################################################################
+''' Instantiate Class'''
+##############################################################################################	
+''' create an object for the class, will be used thoughout this script for running system calls '''
+a = Deploy_Servers()
+
+
+#############################################################################################
+''' Execution of deployCDN scripts begins from here'''
+##############################################################################################	
+try:
+	''' parsing command line arguments'''
+	command_line_text = getopt.getopt(sys.argv[1:], 'p:o:n:u:i:')
+	operators_in_command_line = command_line_text[0]
+	command_line_args = command_line_text[1]
+
+	for an_operator, an_arg in operators_in_command_line:
+		if an_operator == "-p":
+			udp_port_number = int(an_arg)
+
+		elif an_operator == "-o":
+			origin_name = an_arg
+
+		elif an_operator == "-n":
+			dns_cs5700cdn_example = an_arg
+
+		elif an_operator == "-u":
+			user_name = an_arg
+
+		elif an_operator == "-i":
+			key_file =  an_arg
+
+
+	''' deploy dns servers '''
+	dns_hosted_on = "cs5700cdnproject.ccs.neu.edu"
+	user_name_at_host_name = user_name + "@" + dns_hosted_on
+	scp_mydnsserver_file = "scp -i " + key_file + " dnsserver " +user_name_at_host_name + ":~/"
+	scp_mapping_py_file = "scp -i " + key_file + " mappingscript.py " +user_name_at_host_name + ":~/"
+
+	a.cmd_run(scp_mydnsserver_file)
+	a.cmd_run(scp_mapping_py_file)
+
+
+	''' deploy http servers to all replicas'''
+	for ec2_server_name in list_ec2_replicas:
+		user_name_at_host_name = user_name+"@"+ec2_server_name
+		scp_myhttpserver_file = "scp -i " + key_file + " httpserver " +user_name_at_host_name + ":~/"
+
+		a.cmd_run(scp_myhttpserver_file)
+except:
+	print "Error occured while running deployCDN project, Please try again!"
+
+
+#############################################################################################
+''' Script Ends'''
+##############################################################################################	
+
+
+
