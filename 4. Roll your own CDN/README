@@ -1,6 +1,6 @@
-﻿************************************************************************************************************************************
+﻿*****************************************************************************************************
 High Level Approach
-************************************************************************************************************************************
+*****************************************************************************************************
 
 Following components have been submitted by our team for the final submission:
 1. DNS Server        (filename - dnsserver)
@@ -108,9 +108,9 @@ where port, origin, name, username, keyfile are same as discussed in 3.1
 where port, origin, name, username, keyfile are same as discussed in 3.1
 
 
-************************************************************************************************************************************
+*****************************************************************************************************
 Challenges Faced
-************************************************************************************************************************************
+*****************************************************************************************************
 
 It took us around two days just to understand the requirements. Particularly the requirement for DNS server was not clear to us even after reaing questiong four to  five times. And we were searcing answers for questions like how the separate entities like EC2 machines, DNS and HTTP servers, and mapping script will be communicating to each other. Once we were good with the requirements we looked for the deliverables for the milestone, and realized that it was base of this project, which can easily be enhanced funtionality wise and easily made scalable for ec2 machines. We would not say requirements were tough to understand or it was not clear mentioned, but unlike previous projects there were many connecting components to be delivered, which are bound to work together. We could not start working on this project until we were clear with the architecture. Once we got hold of it, we planned to start with the DNS server first. 
 
@@ -124,9 +124,9 @@ How to implement handlers, and override their methods was clear to us, so we fou
 Although we did not face any difficulty while preparing deployCDN script but for runCDN we had to start a process on DNS sever and another on HTTP, so the syntax for running a process in background of a server was new for us, we fixed this issue using 'nohup' and could successfully run processes on background of respective servers. 
 
 
-************************************************************************************************************************************
+*****************************************************************************************************
 Each team member contribution
-************************************************************************************************************************************
+*****************************************************************************************************
 
 *****Contribution by team-members****
 Vikas was primarily responsible for the following tasks:
@@ -153,7 +153,12 @@ Shaalini was primarily responsible for the follwing tasks:
 * Prepared deployCDN, and stopCDN scripts and Makefile
 
 
-************************************************************************************************************************************
+*****************************************************************************************************
 Scope of Improvement
-************************************************************************************************************************************
+*****************************************************************************************************
 If we had more time we would have implemented multithreaded HTTP server to serve multiple clients at once thus improving the performance. When content is available in the CDN, it is meant to be available for the clients so we would have implemented functionality to made it available over IPV4 and IPV6 as well.
+
+
+*****************************************************************************************************
+END
+*****************************************************************************************************
