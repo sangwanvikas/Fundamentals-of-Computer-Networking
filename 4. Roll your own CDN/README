@@ -6,7 +6,7 @@ Following components have been submitted by our team for the final submission:
 1. DNS Server        (filename - dnsserver)
 2. mapping script    (filename - mapping script.py)
 3. HTTP clients      (filename - httpserver)
-4. deployCDN/ runCDN / stopCDN 
+4. deployCDN/ runCDN / stopCDN  
 
 1. DNS Server
 When the DNS recives a request from a client, it pasrses request and maps client to "good" replica servers. We have written a script, separate from dnsserver, to implement this functionality and named this file to 'mappingscript.py'.We parse arguments for dnsserver file using 'getopt' module. We have used 'SocketServer' for providing network server feature importing following two classes-
